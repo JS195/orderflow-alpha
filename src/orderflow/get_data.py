@@ -2,10 +2,30 @@ import requests
 import zipfile
 import io
 import pandas as pd
-from datetime import datetime, timedelta
-from typing import List, Optional
+from datetime import timedelta
 
 BASE_URL = "https://data.binance.vision"
+
+from concurrent.futures import ThreadPoolExecutor
+import pandas as pd
+
+def fetch(streams: dict, symbol: str, dates: list, max_workers: int = 32) -> dict:
+    tasks = [(name, fn, d) for name, fn in streams.items() for d in dates]
+    frames = {name: [] for name in streams}
+    
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(tasks))) as ex:
+        for name, df in ex.map(lambda t: (t[0], t[1](symbol, t[2])), tasks):
+            if not df.empty:
+                frames[name].append(df)
+
+    result = {}
+    for name, dfs in frames.items():
+        if dfs:
+            result[name] = pd.concat(dfs).sort_index()
+        else:
+            result[name] = pd.DataFrame()
+
+    return result
 
 def download_zip_in_memory(url: str, header="infer") -> pd.DataFrame:
     resp = requests.get(url)
