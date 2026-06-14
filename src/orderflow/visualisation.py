@@ -72,10 +72,8 @@ TRACE_MAPPING = {
 }
 
 
-def build_order_flow_chart(df, date, config, symbol="BTCUSDT", timeframe="5min", height=900):
-    """
-    Builds a completely customizable multi-panel order flow chart dynamically from a configuration list.
-    """
+def build_order_flow_chart(df, symbol="BTCUSDT", timeframe="5min", height=900):
+    config = df.attrs.get("layout")
     df = df.ffill()
 
     titles = [panel["title"] for panel in config]
@@ -83,7 +81,7 @@ def build_order_flow_chart(df, date, config, symbol="BTCUSDT", timeframe="5min",
     fig = create_ohlcv_figure(
         n_rows=len(config),
         subplot_titles=titles,
-        title_text=f"{symbol} Order Flow - {timeframe} | {date}",
+        title_text=f"{symbol} Order Flow - {timeframe} | {df.index[0]} -> {df.index[-1]}",
         height=height
     )
 

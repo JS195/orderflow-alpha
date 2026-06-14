@@ -3,9 +3,6 @@ import zipfile
 import io
 import pandas as pd
 from datetime import timedelta
-
-BASE_URL = "https://data.binance.vision"
-
 from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 
@@ -79,6 +76,7 @@ def futures_agg_trades(symbol: str, date: str) -> pd.DataFrame:
     df.index = pd.to_datetime(df.index, unit='ms')
     return df
 
+# Leave this incase I come back and want the settled funding rate but tbh this is kind of dead code now
 def get_funding_rate(symbol: str, date: str, annualize: bool = True) -> pd.DataFrame:
     start = pd.Timestamp(date, tz="UTC")
     end = start + timedelta(days=1)
