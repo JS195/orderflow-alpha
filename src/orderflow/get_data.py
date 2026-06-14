@@ -7,16 +7,16 @@ from typing import List, Optional
 
 BASE_URL = "https://data.binance.vision"
 
-def download_zip_in_memory(url: str) -> pd.DataFrame:
+def download_zip_in_memory(url: str, header="infer") -> pd.DataFrame:
     resp = requests.get(url)
     resp.raise_for_status()
     zip_bytes = io.BytesIO(resp.content)
-    
+
     with zipfile.ZipFile(zip_bytes) as z:
         csv_name = [f for f in z.namelist() if f.endswith('.csv')][0]
         with z.open(csv_name) as f:
-            df = pd.read_csv(f, parse_dates=False)
-    
+            df = pd.read_csv(f, parse_dates=False, header=header)
+
     return df
 
 
@@ -59,9 +59,53 @@ def futures_agg_trades(symbol: str, date: str) -> pd.DataFrame:
     df.index = pd.to_datetime(df.index, unit='ms')
     return df
 
+def get_funding_rate(symbol: str, date: str, annualize: bool = True) -> pd.DataFrame:
+    start = pd.Timestamp(date, tz="UTC")
+    end = start + timedelta(days=1)
+
+    url = "https://fapi.binance.com/fapi/v1/fundingRate"
+    params = {
+        "symbol": symbol,
+        "startTime": int(start.timestamp() * 1000),
+        "endTime": int(end.timestamp() * 1000) - 1,
+        "limit": 1000,
+    }
+    resp = requests.get(url, params=params)
+    resp.raise_for_status()
+    data = resp.json()
+
+    df = pd.DataFrame(data)
+    if df.empty:
+        cols = ["funding_rate"] + (["funding_rate_annualized"] if annualize else [])
+        return pd.DataFrame(columns=cols, index=pd.DatetimeIndex([], name="fundingTime"))
+
+    # Floor off the millisecond jitter Binance reports so settlements land
+    # exactly on the funding boundary (00:00/08:00/16:00) and align with the
+    # 5-min grid when joined into the combined dataframe.
+    df["fundingTime"] = pd.to_datetime(df["fundingTime"], unit="ms").dt.floor("s")
+    df["fundingRate"] = df["fundingRate"].astype(float)
+    df = df.set_index("fundingTime").sort_index()
+
+    out = df[["fundingRate"]].rename(columns={"fundingRate": "funding_rate"})
+
+    if annualize:
+        # Infer the funding interval (8h for most perps, 4h for some) from the
+        # spacing between settlements so annualization stays correct per symbol.
+        if len(out) > 1:
+            interval_hours = out.index.to_series().diff().median().total_seconds() / 3600
+        else:
+            interval_hours = 8.0
+        periods_per_year = (24 / interval_hours) * 365
+        out["funding_rate_annualized"] = out["funding_rate"] * periods_per_year
+
+    return out
+
+
 def spot_agg_trades(symbol, date):
     url = f"https://data.binance.vision/data/spot/daily/klines/{symbol}/5m/{symbol}-5m-{date}.zip"
-    df = download_zip_in_memory(url)
+    # Binance spot kline dumps have NO header row, so read positionally and
+    # assign names ourselves; otherwise the first candle is eaten as a header.
+    df = download_zip_in_memory(url, header=None)
     cols = [
         "open_time",
         "open",
@@ -77,6 +121,9 @@ def spot_agg_trades(symbol, date):
         "ignore"
     ]
     df.columns = cols
+    # Guard in case Binance later adds a header row: drop any non-numeric open_time.
+    df = df[pd.to_numeric(df['open_time'], errors='coerce').notna()].copy()
+    df['open_time'] = df['open_time'].astype('int64')
     df['buy_volume']  = df['taker_buy_base_asset_volume']
     df['sell_volume'] = df['volume'] - df["taker_buy_base_asset_volume"]
     df['volume_delta'] = df['buy_volume'] - df['sell_volume']
