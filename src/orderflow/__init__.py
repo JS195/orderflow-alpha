@@ -3,6 +3,7 @@
 from importlib.metadata import version as _version, PackageNotFoundError as _PackageNotFoundError
 from .get_data import (
     download_zip_in_memory,
+    fetch,
     futures_agg_trades,
     get_bookDepth,
     get_funding_rate,
@@ -10,6 +11,11 @@ from .get_data import (
     get_oi,
     get_premium_index_klines,
     spot_agg_trades,
+)
+from .features import (
+    FEATURES,
+    build_dataset,
+    default_layout,
 )
 from .visualisation import (
     build_order_flow_chart,
@@ -27,6 +33,10 @@ except _PackageNotFoundError:
 # Explicitly declare the clean public interface for the quant package
 __all__ = [
     "download_zip_in_memory",
+    "fetch",
+    "build_dataset",
+    "default_layout",
+    "FEATURES",
     "get_oi",
     "get_bookDepth",
     "get_funding_rate",
