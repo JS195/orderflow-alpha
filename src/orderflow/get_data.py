@@ -82,7 +82,7 @@ def spot_agg_trades(symbol, date):
     df['volume_delta'] = df['buy_volume'] - df['sell_volume']
     df['spot_cumulative_volume_delta'] = df['volume_delta'].cumsum()
     df = df.set_index('open_time')
-    df.index = pd.to_datetime(df.index, unit='ms')
+    df.index = pd.to_datetime(df.index, unit='us')
     return df
 
 

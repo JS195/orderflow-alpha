@@ -11,9 +11,6 @@ from .get_data import (
     spot_agg_trades,
 )
 from .visualisation import (
-    add_candlestick,
-    add_delta_bars,
-    add_line,
     build_order_flow_chart,
     create_ohlcv_figure,
 )
