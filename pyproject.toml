@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "orderflow-alpha"
+version = "0.1.0"
+description = "Order flow data fetching and visualisation tools for crypto futures and spot markets."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12"
+authors = [{ name = "Joshua Smith", email = "josh.smith195@outlook.com" }]
+keywords = ["orderflow", "crypto", "trading", "binance", "visualisation"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "pandas",
+    "plotly",
+    "requests",
+    "nbformat>=4.2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/jsmith/orderflow-alpha"
+Documentation = "https://github.com/jsmith/orderflow-alpha/tree/main/docs"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/orderflow"]
