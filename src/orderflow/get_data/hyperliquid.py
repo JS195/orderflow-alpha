@@ -1,0 +1,126 @@
+import requests
+import pandas as pd
+import time
+from datetime import timedelta
+from concurrent.futures import ThreadPoolExecutor
+
+# Official public "Info" endpoint - a single POST route dispatched by a
+# "type" field, not a REST-per-resource API like the other exchanges.
+# https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint
+BASE_URL = "https://api.hyperliquid.xyz/info"
+
+
+def _post(body: dict, max_retries: int = 6) -> requests.Response:
+    """POST with backoff on 429s. Info requests share an aggregated weight
+    budget of 1200/min per IP - a single build_dataset call already fires
+    several of these concurrently (one per stream per warmup day), enough
+    to trip it if anything else on the same IP has been calling the API too."""
+    for attempt in range(max_retries):
+        resp = requests.post(BASE_URL, json=body)
+        if resp.status_code != 429:
+            resp.raise_for_status()
+            return resp
+        time.sleep(float(resp.headers.get("Retry-After", 0)) or 0.5 * (attempt + 1))
+    resp.raise_for_status()
+    return resp
+
+
+def fetch(streams: dict, symbol: str, dates: list, max_workers: int = 8) -> dict:
+    """Matches the Binance signature."""
+    tasks = [(name, fn, d) for name, fn in streams.items() for d in dates]
+    frames = {name: [] for name in streams}
+
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(tasks))) as ex:
+        for name, df in ex.map(lambda t: (t[0], t[1](symbol, t[2])), tasks):
+            if not df.empty:
+                frames[name].append(df)
+
+    return {
+        name: pd.concat(dfs).sort_index() if dfs else pd.DataFrame()
+        for name, dfs in frames.items()
+    }
+
+
+def _day_bounds_ms(date: str) -> tuple[int, int]:
+    start = pd.Timestamp(date, tz="UTC")
+    return int(start.timestamp() * 1000), int((start + timedelta(days=1)).timestamp() * 1000)
+
+
+def get_mark_price_klines(symbol: str, date: str, interval: str = "5m") -> pd.DataFrame:
+    """OHLC candles for a perp, e.g. symbol='BTC' (Hyperliquid coins have no
+    quote-currency suffix - not 'BTCUSDT' or 'BTC-USDT-SWAP', just 'BTC').
+
+    POST /info {"type": "candleSnapshot", "req": {coin, interval, startTime,
+    endTime}}. This is traded price, not a distinct mark-price series -
+    Hyperliquid's public API doesn't expose one separately from candles the
+    way the other three exchanges do. A full day at 5m is 289 candles in a
+    single request (verified live), no pagination needed.
+    """
+    start_ts, end_ts = _day_bounds_ms(date)
+    resp = _post({
+        "type": "candleSnapshot",
+        "req": {"coin": symbol, "interval": interval, "startTime": start_ts, "endTime": end_ts},
+    })
+    candles = resp.json()
+    if not candles:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(candles)
+    df["open_time"] = pd.to_numeric(df["t"])
+    df = df.set_index("open_time").sort_index()
+    df.index = pd.to_datetime(df.index, unit="ms")
+    df = df.rename(columns={"o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"})
+    return df[["open", "high", "low", "close", "volume"]].astype(float)
+
+
+def get_premium_index_klines(symbol: str, date: str) -> pd.DataFrame:
+    """The actual mark-vs-oracle premium (fractional) - not an index price -
+    since features._funding averages and clamps `close` as if it were
+    already the premium, the same shape as Binance's premiumIndexKlines.
+
+    POST /info {"type": "fundingHistory", "coin", "startTime", "endTime"}
+    gives Hyperliquid's real settled premium/funding directly (no need to
+    reconstruct it from mark/index candles the way OKX does). Hyperliquid
+    settles hourly, not every 8h like the other three exchanges, so this
+    returns 24 readings/day at native resolution rather than resampling to
+    match their cadence - features._funding infers its own step size from
+    the data, so an unmodified hourly series still smooths correctly over a
+    real trailing 8h, just from 8 samples here instead of dozens.
+    """
+    start_ts, end_ts = _day_bounds_ms(date)
+    resp = _post({"type": "fundingHistory", "coin": symbol, "startTime": start_ts, "endTime": end_ts})
+    rows = resp.json()
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+    df["ts"] = pd.to_numeric(df["time"])
+    df = df.set_index("ts").sort_index()
+    df.index = pd.to_datetime(df.index, unit="ms")
+    df["close"] = df["premium"].astype(float)
+    return df[["close"]]
+
+
+def get_oi(symbol: str, date: str) -> pd.DataFrame:
+    """No historical open interest here: Hyperliquid's public API only
+    exposes *current* OI (via metaAndAssetCtxs, a live snapshot), not a
+    queryable time series. Historical OI would require paid, requester-pays
+    S3 archives (s3://hyperliquid-archive) - not wired up without explicit
+    sign-off given the real AWS cost involved."""
+    return pd.DataFrame()
+
+
+def futures_agg_trades(symbol: str, date: str) -> pd.DataFrame:
+    """No historical taker buy/sell trade data here: Hyperliquid's public
+    API has no market-wide historical trades endpoint - only a single
+    user's fills (userFills/userFillsByTime) and recentTrades, which is
+    live-only with no time-range params (verified against the official
+    Python SDK's info.py, which implements neither a market-wide historical
+    trades method nor a documented workaround). The only historical trade
+    source is the same paid, requester-pays S3 archive as OI."""
+    return pd.DataFrame()
+
+
+def spot_agg_trades(symbol: str, date: str) -> pd.DataFrame:
+    """Hyperliquid perps only for this module - no spot CVD."""
+    return pd.DataFrame()
