@@ -102,13 +102,8 @@ def default_layout(features):
     return panels
 
 
-def build_dataset(symbol, start, end, timeframe="5min", features=None, source="binance"):
-    if source not in SOURCES:
-        raise ValueError(f"Unknown source {source!r}; choose one of {list(SOURCES)}")
+def _fetch_source_df(symbol, start, end, timeframe, features, source):
     data_module = SOURCES[source]
-
-    features = list(FEATURES) if features is None else list(features)
-    start, end = pd.Timestamp(start), pd.Timestamp(end)
 
     # Warm-up is per-feature: go back far enough to cover the largest lookback any
     # requested feature declares (e.g. funding's 8h rolling window). Features with
@@ -135,7 +130,32 @@ def build_dataset(symbol, start, end, timeframe="5min", features=None, source="b
         )
 
     columns = [FEATURES[name]["preprocess"](raw[name], timeframe) for name in features]
-    df = pd.concat(columns, axis=1).loc[start.floor(timeframe):end]
+    return pd.concat(columns, axis=1).loc[start.floor(timeframe):end]
+
+
+def build_dataset(start, end, timeframe="5min", features=None, source=None):
+    # source is a {exchange_name: symbol} dict, e.g. {"binance": "BTCUSDT"}
+    # for a single exchange, or {"binance": "BTCUSDT", "bybit": "BTCUSDT"} to
+    # aggregate across exchanges - the per-source frames are just added
+    # together, same as velo's own "aggregate" views. Symbol format differs
+    # per exchange (Binance wants "BTCUSDT", OKX wants "BTC-USDT-SWAP", ...),
+    # so each exchange gets its own symbol string as the dict value.
+    if not isinstance(source, dict) or not source:
+        raise ValueError(
+            f"source must be a non-empty {{exchange: symbol}} dict, e.g. "
+            f'{{"binance": "BTCUSDT"}}; got {source!r}'
+        )
+    unknown = [s for s in source if s not in SOURCES]
+    if unknown:
+        raise ValueError(f"Unknown source(s) {unknown}; choose from {list(SOURCES)}")
+
+    features = list(FEATURES) if features is None else list(features)
+    start, end = pd.Timestamp(start), pd.Timestamp(end)
+
+    per_source = [_fetch_source_df(symbol, start, end, timeframe, features, s) for s, symbol in source.items()]
+    df = per_source[0]
+    for other in per_source[1:]:
+        df = df + other
 
     # We anchor the CVD at 0. This is not ideal but we can't endlessly go back. We care more about the shape and what its doing anyways.
     for col in [c for c in df.columns if "cumulative_volume_delta" in c]:
@@ -149,9 +169,9 @@ def build_dataset(symbol, start, end, timeframe="5min", features=None, source="b
             # an opaque IndexError from .iloc[0] on an empty series instead
             # of a message that points at the actual cause.
             raise ValueError(
-                f"'{col}' has no data inside window={start}..{end} for source={source!r}, "
-                f"symbol={symbol!r} - the underlying data may not cover this time range "
-                f"(some sources only retain a rolling window of recent history)."
+                f"'{col}' has no data inside window={start}..{end} for source={source!r} - "
+                f"the underlying data may not cover this time range (some sources only "
+                f"retain a rolling window of recent history)."
             )
         df[col] = df[col] - valid.iloc[0]
 

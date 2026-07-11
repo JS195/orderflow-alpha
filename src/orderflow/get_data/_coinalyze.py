@@ -1,18 +1,27 @@
 """Shared Coinalyze fallback for open interest and taker buy/sell volume.
 
 Not a registered `source` in features.SOURCES - this is a supplementary data
-source other get_data modules pull from to extend their own history, not
-something you'd select on its own (Coinalyze doesn't have candles/funding,
-so it can't stand in for a whole exchange).
+source other get_data modules pull from to extend or replace their own data,
+not something you'd select on its own (Coinalyze doesn't have candles/
+funding, so it can't stand in for a whole exchange).
 
-Why this exists: OKX's own OI/taker-volume endpoints only retain ~2 days at
-5-min resolution, degrading to daily beyond ~4 days (see okx.py). Hyperliquid
-has no historical OI or market-wide trades endpoint at all, free or
-otherwise. Coinalyze (api.coinalyze.net) aggregates both exchanges' OI and
-buy/sell volume with its own retention tiers - verified live: ~7-8 days at
-5min, ~85 days at 1hour, indefinite at daily. For OKX this extends the
-useful high-resolution window; for Hyperliquid it's the only source of this
-data at all.
+Why this exists:
+- OKX's own OI/taker-volume endpoints only retain ~2 days at 5-min
+  resolution, degrading to daily beyond ~4 days (see okx.py).
+- Hyperliquid has no historical OI or market-wide trades endpoint at all,
+  free or otherwise (see hyperliquid.py).
+- Coinbase's own ticker endpoint reports the MAKER side of a trade, not the
+  taker side CVD needs - even after inverting for that, the resulting spot
+  CVD still didn't match velo.xyz's Coinbase-only chart, so Coinbase's
+  spot_agg_trades sources buy/sell volume from here entirely instead (see
+  coinbase.py).
+
+Coinalyze (api.coinalyze.net) aggregates OI and buy/sell volume for both
+futures and spot markets across many exchanges, with its own retention
+tiers - verified live: ~7-8 days at 5min, ~85 days at 1hour, indefinite at
+daily. Its own buy/sell classification was independently spot-checked via
+the tick rule (price direction vs. volume-delta sign) and found to be
+correctly oriented, unlike Coinbase's raw maker-side field.
 
 Requires a free Coinalyze account (https://coinalyze.net/account/api-key/,
 no credit card) - set the key as the COINALYZE_API_KEY environment variable.
