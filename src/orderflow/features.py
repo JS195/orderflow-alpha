@@ -1,13 +1,14 @@
 import numpy as np
 import pandas as pd
 
-from .get_data import binance, okx, bybit, coinbase
+from .get_data import binance, okx, bybit, coinbase, hyperliquid
 
 SOURCES = {
     "binance": binance,
     "okx": okx,
     "bybit": bybit,
     "coinbase": coinbase,
+    "hyperliquid": hyperliquid,
 }
 
 
@@ -138,7 +139,21 @@ def build_dataset(symbol, start, end, timeframe="5min", features=None, source="b
 
     # We anchor the CVD at 0. This is not ideal but we can't endlessly go back. We care more about the shape and what its doing anyways.
     for col in [c for c in df.columns if "cumulative_volume_delta" in c]:
-        df[col] = df[col] - df[col].dropna().iloc[0]
+        valid = df[col].dropna()
+        if valid.empty:
+            # raw[name] wasn't empty (that check already passed above), but
+            # none of the rows it did have land inside [start, end] once
+            # sliced - e.g. a source with a rolling retention window (like
+            # Deribit's ~24h trade history) where the requested date range
+            # has already aged out from under it. Without this check that's
+            # an opaque IndexError from .iloc[0] on an empty series instead
+            # of a message that points at the actual cause.
+            raise ValueError(
+                f"'{col}' has no data inside window={start}..{end} for source={source!r}, "
+                f"symbol={symbol!r} - the underlying data may not cover this time range "
+                f"(some sources only retain a rolling window of recent history)."
+            )
+        df[col] = df[col] - valid.iloc[0]
 
     df.attrs["features"] = features
     df.attrs["layout"] = default_layout(features)
