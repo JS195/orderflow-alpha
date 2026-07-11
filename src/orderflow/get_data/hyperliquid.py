@@ -11,6 +11,12 @@ from . import _coinalyze
 # https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint
 BASE_URL = "https://api.hyperliquid.xyz/info"
 
+# Features this source can never provide, no matter the symbol/window/API
+# key - features.build_dataset skips these silently instead of raising, as
+# opposed to a supported feature returning empty for a real reason (bad
+# symbol, missing COINALYZE_API_KEY, data outside retention).
+UNSUPPORTED = frozenset({"spot_cvd"})
+
 
 def _post(body: dict, max_retries: int = 6) -> requests.Response:
     """POST with backoff on 429s. Info requests share an aggregated weight
@@ -83,11 +89,26 @@ def get_premium_index_klines(symbol: str, date: str) -> pd.DataFrame:
     POST /info {"type": "fundingHistory", "coin", "startTime", "endTime"}
     gives Hyperliquid's real settled premium/funding directly (no need to
     reconstruct it from mark/index candles the way OKX does). Hyperliquid
-    settles hourly, not every 8h like the other three exchanges, so this
-    returns 24 readings/day at native resolution rather than resampling to
-    match their cadence - features._funding infers its own step size from
-    the data, so an unmodified hourly series still smooths correctly over a
-    real trailing 8h, just from 8 samples here instead of dozens.
+    only settles/reports this hourly though (not every 8h like the other
+    three exchanges, and not every ~30-90s like OKX's own premium ticks) -
+    upsampled onto a 1-min grid (same as okx.py) before returning, so
+    features._funding's rolling smoother has a real point at every step and
+    produces a value at every 5-min output bucket instead of one real point
+    per hour and NaN elsewhere. The smoothing still only has 8 genuinely
+    distinct inputs per 8h window (each just repeated ~60x), but the
+    rolling weighted average blends them into a continuously-evolving line
+    rather than a stepped one - and critically, this also means the funding
+    column no longer has gaps that null out other exchanges' real values
+    when aggregated together in build_dataset (source={...} with multiple
+    exchanges just adds the columns).
+
+    Resampled to 1-min (Hyperliquid's own timestamps land a few tens of ms
+    past the hour, not exactly on it, so this also snaps them onto a clean
+    grid) then reindexed onto the full calendar day before ffilling - each
+    day is fetched separately, so ffilling only between this day's own
+    first/last update leaves the last ~59 minutes empty (nothing later in
+    that same day's own frame to ffill from), which reappears as a gap once
+    days are concatenated.
     """
     start_ts, end_ts = _day_bounds_ms(date)
     resp = _post({"type": "fundingHistory", "coin": symbol, "startTime": start_ts, "endTime": end_ts})
@@ -100,7 +121,8 @@ def get_premium_index_klines(symbol: str, date: str) -> pd.DataFrame:
     df = df.set_index("ts").sort_index()
     df.index = pd.to_datetime(df.index, unit="ms")
     df["close"] = df["premium"].astype(float)
-    return df[["close"]]
+    full_day = pd.date_range(pd.Timestamp(date), periods=24 * 60, freq="1min")
+    return df[["close"]].resample("1min").last().reindex(full_day).ffill()
 
 
 def _coinalyze_symbol(symbol: str) -> str:

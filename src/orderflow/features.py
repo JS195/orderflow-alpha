@@ -105,6 +105,17 @@ def default_layout(features):
 def _fetch_source_df(symbol, start, end, timeframe, features, source):
     data_module = SOURCES[source]
 
+    # Features this source can never provide (e.g. spot_cvd on Hyperliquid,
+    # funding/oi/fut_cvd on Coinbase) are dropped here rather than fetched -
+    # that's a structural fact about the exchange, not a real error, so it
+    # shouldn't raise. A *supported* feature coming back empty still raises
+    # below, since that's a real problem (bad symbol, missing optional API
+    # key, data outside retention).
+    unsupported = getattr(data_module, "UNSUPPORTED", frozenset())
+    features = [name for name in features if name not in unsupported]
+    if not features:
+        return None
+
     # Warm-up is per-feature: go back far enough to cover the largest lookback any
     # requested feature declares (e.g. funding's 8h rolling window). Features with
     # no "warmup" need none, so a query without them fetches no extra days.
@@ -153,9 +164,16 @@ def build_dataset(start, end, timeframe="5min", features=None, source=None):
     start, end = pd.Timestamp(start), pd.Timestamp(end)
 
     per_source = [_fetch_source_df(symbol, start, end, timeframe, features, s) for s, symbol in source.items()]
+    per_source = [df for df in per_source if df is not None]
+    if not per_source:
+        raise ValueError(f"None of {list(source)} support any of {features}")
+
     df = per_source[0]
     for other in per_source[1:]:
-        df = df + other
+        # fill_value=0, not plain "+": a bucket missing from only one source
+        # (e.g. a sparser feature with real gaps) should fall back to the
+        # other source's real value there, not go NaN and wipe it out.
+        df = df.add(other, fill_value=0)
 
     # We anchor the CVD at 0. This is not ideal but we can't endlessly go back. We care more about the shape and what its doing anyways.
     for col in [c for c in df.columns if "cumulative_volume_delta" in c]:
