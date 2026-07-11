@@ -20,15 +20,14 @@ Phase 3 will be sizing and risk.
 | Source | Feature | Limitation | Verified |
 | :--- | :--- | :--- | :--- |
 | Binance | all | none | static archive, full history since inception |
-| OKX | oi, fut_cvd | native data only ~2 days back at 5-min, ~3-4 days at 1H, daily beyond that — extended to ~7-8 days/5min, ~85 days/1hour, indefinite/daily via a free optional Coinalyze supplement (set `COINALYZE_API_KEY`; falls back to native-only if unset) | tested repeatedly this session, incl. no-key fallback |
+| OKX | oi, fut_cvd | native OKX data only covers ~2 days back at 5-min. Beyond that, goes straight to a free Coinalyze supplement (set `COINALYZE_API_KEY`) for genuine 5-min resolution out to ~7-8 days, ~85 days/1hour, indefinite/daily — deliberately skips OKX's own coarser native 1H/1D tiers in favour of Coinalyze's finer ones. Only degrades to OKX's own 1H/1D as a last resort if no key is set | tested repeatedly this session, incl. no-key fallback and multi-day-old dates confirmed at true 5-min resolution via Coinalyze |
 | OKX | spot_cvd | 5-min data only ~2 days back, 1H only ~3-4 days, degrades to daily beyond that — no Coinalyze supplement (its OKX spot symbol mapping isn't verified) | tested repeatedly this session |
 | OKX | ohlc, funding | none | bar-based candles, full history |
 | Bybit | fut_cvd/spot_cvd | none in depth — verified public trade dumps exist back to Jan 2025 (likely further). Only a speed cost (full-day tick-tape CSV download per day) | just verified |
-| Coinbase | spot_cvd | none in depth — verified 1 year back still works. Only a speed cost (100 trades/page cap) | just verified |
+| Coinbase | spot_cvd | **known open issue** — shape doesn't match velo.xyz's Coinbase-only spot CVD chart. Maker-vs-taker side inversion was checked and confirmed correct (both via official docs text and independently via the tick rule), current v3 Advanced Trade API is used per the official spec, and the API was reimplemented from scratch against it — root cause of the mismatch is still unresolved | reproduced against velo.xyz repeatedly; not yet fixed |
 | Hyperliquid | ohlc | capped at ~5000 most recent candles per interval — ~17 days at 5-min, but ~208 days at 1-hour, ~13+ years at daily | just verified live (boundary is between 15-20 days at 5m; 60 days back works fine at 1h) |
 | Hyperliquid | funding | none — tested 800+ days back, still works | just verified |
-| Hyperliquid | oi | not available from Hyperliquid's own API at all historically — only a live current snapshot exists via the free public API. Sourced from a free optional Coinalyze supplement instead (~7-8 days/5min, ~85 days/1hour, indefinite/daily); errors clearly if `COINALYZE_API_KEY` is unset rather than returning empty/garbage data | confirmed against official SDK source; Coinalyze path tested this session |
-| Hyperliquid | fut_cvd | not available from Hyperliquid's own API at all historically — no market-wide historical trades endpoint exists free; only live-only recentTrades and per-user fills. Sourced from the same free optional Coinalyze supplement as oi | confirmed against official SDK source; Coinalyze path tested this session |
+| Hyperliquid | oi, fut_cvd | not available from Hyperliquid's own API at all historically — only a live current snapshot exists via the free public API, and no market-wide historical trades endpoint exists free (only live-only recentTrades and per-user fills). Sourced entirely from the free Coinalyze supplement instead (~7-8 days/5min, ~85 days/1hour, indefinite/daily); errors clearly if `COINALYZE_API_KEY` is unset rather than returning empty/garbage data | confirmed against official SDK source; Coinalyze path tested this session, full 5-min resolution confirmed multiple days back |
 
 ### Phase 2: ML & Signal Research (In Progress / Next Step)
 - ML to exploit order-flow imbalances, funding discrepancies, and multi-venue CVD regimes.
@@ -48,7 +47,7 @@ pip install -e .
 
 Then see script.ipynb in notebooks for usage examples.
 
-Optional: for extended OKX `oi`/`fut_cvd` history and any Hyperliquid `oi`/`fut_cvd` at all, get a free key at https://coinalyze.net/account/api-key/ and set it as `COINALYZE_API_KEY` in your environment. Everything else works without it.
+Optional: for extended OKX `oi`/`fut_cvd` history and any Hyperliquid `oi`/`fut_cvd` at all, get a free key at https://coinalyze.net/account/api-key/ and set it as `COINALYZE_API_KEY` in your environment. Everything else works without it. If running through a Jupyter kernel in VS Code, make sure VS Code is actually configured to pass environment variables through to the kernel — a var exported in your shell isn't automatically visible there otherwise.
 
 ---
 
