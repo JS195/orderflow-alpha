@@ -23,13 +23,6 @@ import requests
 import pandas as pd
 import os
 import time
-from dotenv import load_dotenv
-
-# Loads COINALYZE_API_KEY from a .env file at the project root (gitignored)
-# if present, so the key reaches this process regardless of whether the
-# calling shell/kernel had it exported - a plain os.environ lookup alone
-# only works if whatever launched Python happened to inherit the var.
-load_dotenv()
 
 BASE_URL = "https://api.coinalyze.net/v1"
 

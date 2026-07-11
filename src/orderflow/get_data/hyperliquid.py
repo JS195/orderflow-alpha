@@ -4,6 +4,8 @@ import time
 from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor
 
+from . import _coinalyze
+
 # Official public "Info" endpoint - a single POST route dispatched by a
 # "type" field, not a REST-per-resource API like the other exchanges.
 # https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint
@@ -101,24 +103,35 @@ def get_premium_index_klines(symbol: str, date: str) -> pd.DataFrame:
     return df[["close"]]
 
 
+def _coinalyze_symbol(symbol: str) -> str:
+    """'BTC' -> 'BTC.H' - Coinalyze's own per-exchange symbol suffix for
+    Hyperliquid, from /v1/future-markets (symbol_on_exchange='BTC' maps to
+    symbol='BTC.H' for exchange code 'H')."""
+    return f"{symbol}.H"
+
+
 def get_oi(symbol: str, date: str) -> pd.DataFrame:
-    """No historical open interest here: Hyperliquid's public API only
-    exposes *current* OI (via metaAndAssetCtxs, a live snapshot), not a
-    queryable time series. Historical OI would require paid, requester-pays
-    S3 archives (s3://hyperliquid-archive) - not wired up without explicit
-    sign-off given the real AWS cost involved."""
-    return pd.DataFrame()
+    """Hyperliquid's own public API only exposes *current* OI (a live
+    snapshot via metaAndAssetCtxs), not a queryable history, and the only
+    official historical source is a paid, requester-pays S3 archive - not
+    used here. This comes from Coinalyze (api.coinalyze.net) instead, a free
+    third-party aggregator that retains Hyperliquid OI at ~7-8 days/5min,
+    ~85 days/1hour, indefinitely/daily (verified live) - see _coinalyze.py.
+    Requires a free COINALYZE_API_KEY environment variable; if unset, this
+    returns an empty DataFrame (same as any other unsupported feature)."""
+    start_ts, end_ts = _day_bounds_ms(date)
+    return _coinalyze.get_oi(_coinalyze_symbol(symbol), start_ts // 1000, end_ts // 1000)
 
 
 def futures_agg_trades(symbol: str, date: str) -> pd.DataFrame:
-    """No historical taker buy/sell trade data here: Hyperliquid's public
-    API has no market-wide historical trades endpoint - only a single
-    user's fills (userFills/userFillsByTime) and recentTrades, which is
-    live-only with no time-range params (verified against the official
-    Python SDK's info.py, which implements neither a market-wide historical
-    trades method nor a documented workaround). The only historical trade
-    source is the same paid, requester-pays S3 archive as OI."""
-    return pd.DataFrame()
+    """Taker buy/sell delta, from Coinalyze (see get_oi's docstring for why -
+    Hyperliquid's own public API has no market-wide historical trades
+    endpoint at all, only a single user's fills and live-only recentTrades)."""
+    start_ts, end_ts = _day_bounds_ms(date)
+    df = _coinalyze.get_taker_volume(_coinalyze_symbol(symbol), start_ts // 1000, end_ts // 1000)
+    if not df.empty:
+        df["fut_cumulative_volume_delta"] = df["volume_delta"].cumsum()
+    return df
 
 
 def spot_agg_trades(symbol: str, date: str) -> pd.DataFrame:
