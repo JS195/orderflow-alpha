@@ -26,6 +26,12 @@ def fetch(streams: dict, symbol: str, dates: list, max_workers: int = 32) -> dic
 
 def download_zip_in_memory(url: str, header="infer") -> pd.DataFrame:
     resp = requests.get(url)
+    if resp.status_code == 404:
+        # The public archive occasionally has a one-off missing day (verified
+        # live, e.g. 2026-06-29's markPriceKlines while every neighboring day
+        # is fine) - same "no data for this day" case as any other source's
+        # empty-day convention, not worth failing a whole multi-day fetch over.
+        return pd.DataFrame()
     resp.raise_for_status()
     zip_bytes = io.BytesIO(resp.content)
 
@@ -40,6 +46,8 @@ def download_zip_in_memory(url: str, header="infer") -> pd.DataFrame:
 def get_oi(symbol: str, date: str) -> pd.DataFrame:
     url = f"https://data.binance.vision/data/futures/um/daily/metrics/{symbol}/{symbol}-metrics-{date}.zip"
     df = download_zip_in_memory(url)
+    if df.empty:
+        return df
     df = df.set_index('create_time')
     df.index = pd.to_datetime(df.index)
     return df
@@ -54,6 +62,8 @@ def get_bookDepth(symbol, date) -> pd.DataFrame:
 def get_premium_index_klines(symbol: str, date: str, interval: str = "1m") -> pd.DataFrame:
     url = f"https://data.binance.vision/data/futures/um/daily/premiumIndexKlines/{symbol}/{interval}/{symbol}-{interval}-{date}.zip"
     df = download_zip_in_memory(url)
+    if df.empty:
+        return df
     df = df.set_index('open_time')
     df.index = pd.to_datetime(df.index, unit='ms')
     return df
@@ -61,13 +71,17 @@ def get_premium_index_klines(symbol: str, date: str, interval: str = "1m") -> pd
 def get_mark_price_klines(symbol: str, date: str, interval: str = "1m") -> pd.DataFrame:
     url = f"https://data.binance.vision/data/futures/um/daily/markPriceKlines/{symbol}/{interval}/{symbol}-{interval}-{date}.zip"
     df = download_zip_in_memory(url)
+    if df.empty:
+        return df
     df = df.set_index('open_time')
     df.index = pd.to_datetime(df.index, unit='ms')
-    return df 
+    return df
 
 def futures_agg_trades(symbol: str, date: str) -> pd.DataFrame:
     url = f"https://data.binance.vision/data/futures/um/daily/klines/{symbol}/5m/{symbol}-5m-{date}.zip"
     df = download_zip_in_memory(url)
+    if df.empty:
+        return df
     df['buy_volume']  = df['taker_buy_volume']
     df['sell_volume'] = df['volume'] - df["taker_buy_volume"]
     df['volume_delta'] = df['buy_volume'] - df['sell_volume']
@@ -124,6 +138,8 @@ def spot_agg_trades(symbol, date):
     # Binance spot kline dumps have NO header row, so read positionally and
     # assign names ourselves; otherwise the first candle is eaten as a header.
     df = download_zip_in_memory(url, header=None)
+    if df.empty:
+        return df
     cols = [
         "open_time",
         "open",

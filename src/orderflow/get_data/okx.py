@@ -95,13 +95,14 @@ def _fetch_okx_candles(endpoint: str, inst_id: str, date: str, bar: str = "1m") 
 
 # OKX's rubik/stat endpoints (OI and taker-volume) only retain 5-min
 # granularity for a short rolling window (~2 days), then return nothing for
-# older dates even though the request is well-formed. OKX itself will still
-# answer at 1H/1D beyond that, but Coinalyze's own multi-tier supplement
-# (see _coinalyze.py) already covers that same range at genuine 5-min
-# resolution out to ~7-8 days - strictly finer than OKX's own 1H fallback -
-# so a gap in native 5m goes to Coinalyze immediately. OKX's own 1H/1D tiers
-# are demoted to a last resort, only reached if Coinalyze itself can't help
-# (no API key set, or spot - Coinalyze has no verified spot symbol mapping).
+# older dates even though the request is well-formed - OKX itself will still
+# answer at 1H/1D beyond that. Used for SPOT only (see _taker_volume) -
+# CONTRACTS/futures OI and taker-volume come from Coinalyze exclusively
+# (see get_oi), not this native+fallback scheme, because OKX's native
+# futures endpoints report USD notional while Coinalyze (and every other
+# source) is coins-denominated: converting between them with a per-day
+# price join still left a visible discontinuity right at the native/
+# Coinalyze boundary, so it's simpler and cleaner to just not mix them.
 _RUBIK_COVERAGE_THRESHOLD = 0.8
 _RUBIK_COARSE_PERIODS = (("1H", 3_600_000), ("1D", 86_400_000))
 
@@ -147,29 +148,26 @@ def _needs_supplement(df: pd.DataFrame, start_ts: int, end_ts: int) -> bool:
 
 
 def _taker_volume(symbol: str, date: str, inst_type: str) -> pd.DataFrame:
-    """Buy/sell taker volume from OKX's rubik stats. The raw trade tape
-    (`/market/history-trades`) only pages by tradeId with no time-range
-    params, so for a liquid pair like BTC-USDT-SWAP walking a full day back
-    never finishes - this pre-aggregated split is the practical source."""
+    """Buy/sell taker volume. For SPOT, from OKX's own rubik stats - the raw
+    trade tape (`/market/history-trades`) only pages by tradeId with no
+    time-range params, so for a liquid pair like BTC-USDT walking a full
+    day back never finishes, and this pre-aggregated split is the practical
+    source; falls back to OKX's own coarser 1H/1D tiers once native 5m runs
+    out (~2 days), same as before. For CONTRACTS (futures), from Coinalyze
+    exclusively instead - see get_oi for why."""
     start_ts, end_ts = _day_bounds_ms(date)
-    url = f"{BASE_URL}/api/v5/rubik/stat/taker-volume"
-    base_params = {"ccy": _base_ccy(symbol), "instType": inst_type}
-    cols = ["sell_volume", "buy_volume"]
 
-    df = _rubik_rows_to_df(_rubik_stat(url, base_params, start_ts, end_ts), cols)
-
-    # Coinalyze only has a mapping for OKX's perpetual symbol, not spot -
-    # only futures gets the supplement.
-    if inst_type == "CONTRACTS" and _needs_supplement(df, start_ts, end_ts):
-        supplement = _coinalyze.get_taker_volume(_coinalyze_symbol(symbol), start_ts // 1000, end_ts // 1000)
-        if not supplement.empty:
-            supp_cols = supplement[["buy_volume", "sell_volume"]]
-            df = df.combine_first(supp_cols) if not df.empty else supp_cols
-
-    if _needs_supplement(df, start_ts, end_ts):
-        coarse = _rubik_rows_to_df(_rubik_stat_coarse(url, base_params, start_ts, end_ts), cols)
-        if not coarse.empty:
-            df = df.combine_first(coarse) if not df.empty else coarse
+    if inst_type == "CONTRACTS":
+        df = _coinalyze.get_taker_volume(_coinalyze_symbol(symbol), start_ts // 1000, end_ts // 1000)
+    else:
+        url = f"{BASE_URL}/api/v5/rubik/stat/taker-volume"
+        base_params = {"ccy": _base_ccy(symbol), "instType": inst_type}
+        cols = ["sell_volume", "buy_volume"]
+        df = _rubik_rows_to_df(_rubik_stat(url, base_params, start_ts, end_ts), cols)
+        if _needs_supplement(df, start_ts, end_ts):
+            coarse = _rubik_rows_to_df(_rubik_stat_coarse(url, base_params, start_ts, end_ts), cols)
+            if not coarse.empty:
+                df = df.combine_first(coarse) if not df.empty else coarse
 
     if df.empty:
         return df
@@ -220,33 +218,17 @@ def spot_agg_trades(symbol: str, date: str) -> pd.DataFrame:
 
 
 def get_oi(symbol: str, date: str) -> pd.DataFrame:
-    """Historical open interest (USD notional). `/market/history-open-interest`
-    404s on OKX - the rubik stats endpoint is the real source. Once OKX's own
-    ~2 day native 5m retention is exhausted, this goes straight to Coinalyze
-    (see _needs_supplement) rather than OKX's own coarser 1H/1D tiers -
+    """Historical open interest, in coins (base asset, e.g. BTC). Sourced
+    entirely from Coinalyze rather than OKX's own rubik-stat endpoint
+    (`/market/history-open-interest` 404s on OKX anyway, so rubik-stat was
+    always the only native option) - OKX's native endpoint is USD notional
+    while Coinalyze (and Binance/Bybit/Hyperliquid) are coins-denominated,
+    and converting between them with a per-day price join still left a
+    visible discontinuity right at the native/Coinalyze boundary. Using
+    Coinalyze exclusively avoids the unit mismatch and the seam entirely -
+    same approach as hyperliquid.py, which has no native OI source at all.
     Coinalyze retains OKX OI at ~7-8 days/5min, ~85 days/1hour,
-    indefinitely/daily (verified live), all finer than OKX's own fallback.
-    Requires a free COINALYZE_API_KEY environment variable; if unset (or if
-    Coinalyze's own retention is also exhausted), this falls back to OKX's
-    own coarser tiers as a last resort so old dates still return something."""
+    indefinitely/daily (verified live). Requires a free COINALYZE_API_KEY
+    environment variable; returns empty if unset."""
     start_ts, end_ts = _day_bounds_ms(date)
-    url = f"{BASE_URL}/api/v5/rubik/stat/contracts/open-interest-volume"
-    base_params = {"ccy": _base_ccy(symbol)}
-    cols = ["sum_open_interest", "volume"]
-
-    df = _rubik_rows_to_df(_rubik_stat(url, base_params, start_ts, end_ts), cols)
-    if not df.empty:
-        df = df[["sum_open_interest"]]
-
-    if _needs_supplement(df, start_ts, end_ts):
-        supplement = _coinalyze.get_oi(_coinalyze_symbol(symbol), start_ts // 1000, end_ts // 1000)
-        if not supplement.empty:
-            df = df.combine_first(supplement) if not df.empty else supplement
-
-    if _needs_supplement(df, start_ts, end_ts):
-        coarse = _rubik_rows_to_df(_rubik_stat_coarse(url, base_params, start_ts, end_ts), cols)
-        if not coarse.empty:
-            coarse = coarse[["sum_open_interest"]]
-            df = df.combine_first(coarse) if not df.empty else coarse
-
-    return df
+    return _coinalyze.get_oi(_coinalyze_symbol(symbol), start_ts // 1000, end_ts // 1000)
