@@ -149,5 +149,3 @@ def spot_agg_trades(symbol, date):
     df = df.set_index('open_time')
     df.index = pd.to_datetime(df.index, unit='us')
     return df
-
-

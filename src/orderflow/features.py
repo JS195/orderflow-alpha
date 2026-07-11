@@ -1,26 +1,14 @@
-"""Feature layer: turn raw get_data.py streams into a chart/analysis-ready frame.
-
-The public entry point is ``build_dataset`` — give it a symbol, a time window, a
-timeframe and the list of features you want, and it returns a single tidy
-DataFrame on a common index. Each feature also knows how it should be drawn, so
-``build_dataset`` attaches a default chart layout (``df.attrs["layout"]``) inferred
-from the features you asked for; ``build_order_flow_chart`` picks that up
-automatically. Pass an explicit ``config`` to customise.
-
-Add a new queryable feature by adding one entry to ``FEATURES``.
-"""
-
 import numpy as np
 import pandas as pd
 
-from .get_data import (
-    fetch,
-    futures_agg_trades,
-    get_mark_price_klines,
-    get_oi,
-    get_premium_index_klines,
-    spot_agg_trades,
-)
+from .get_data import binance, okx, bybit, coinbase
+
+SOURCES = {
+    "binance": binance,
+    "okx": okx,
+    "bybit": bybit,
+    "coinbase": coinbase,
+}
 
 
 # Preprocessing helpers
@@ -31,7 +19,9 @@ def _ohlc(df, timeframe):
 
 
 def _open_interest(df, timeframe):
-    return df["sum_open_interest"].resample(timeframe).last()
+    s = df["sum_open_interest"].resample(timeframe).last()
+    full_index = pd.date_range(s.index.min().floor("D"), s.index.max(), freq=timeframe)
+    return s.reindex(full_index).interpolate("time", limit_direction="both")
 
 
 def _futures_cvd(df, timeframe):
@@ -72,32 +62,32 @@ def _funding(df, timeframe):
 # Easily add new features at any point
 FEATURES = {
     "ohlc": {
-        "fetch": get_mark_price_klines,
+        "fetch": "get_mark_price_klines",
         "preprocess": _ohlc,
         "panel": {"type": "candlestick", "title": "Price",
                   "name": "Price", "y_title": "Price (USDT)"},
     },
     "oi": {
-        "fetch": get_oi,
+        "fetch": "get_oi",
         "preprocess": _open_interest,
         "panel": {"type": "line", "title": "Open Interest", "column": "sum_open_interest",
                   "name": "Open Interest", "color": "purple", "y_title": "OI"},
     },
     "funding": {
-        "fetch": get_premium_index_klines,
+        "fetch": "get_premium_index_klines",
         "preprocess": _funding,
         "warmup": "8h",
         "panel": {"type": "delta_bars", "title": "Funding Rate", "column": "funding_rate_annualized",
                   "name": "Funding", "color": "orange", "y_title": "Rate"},
     },
     "fut_cvd": {
-        "fetch": futures_agg_trades,
+        "fetch": "futures_agg_trades",
         "preprocess": _futures_cvd,
         "panel": {"type": "delta_bars", "title": "Futures CVD", "column": "fut_cumulative_volume_delta",
                   "name": "Futures Delta", "y_title": "Delta"},
     },
     "spot_cvd": {
-        "fetch": spot_agg_trades,
+        "fetch": "spot_agg_trades",
         "preprocess": _spot_cvd,
         "panel": {"type": "delta_bars", "title": "Spot CVD", "column": "spot_cumulative_volume_delta",
                   "name": "Spot Delta", "y_title": "Delta"},
@@ -111,7 +101,11 @@ def default_layout(features):
     return panels
 
 
-def build_dataset(symbol, start, end, timeframe="5min", features=None):
+def build_dataset(symbol, start, end, timeframe="5min", features=None, source="binance"):
+    if source not in SOURCES:
+        raise ValueError(f"Unknown source {source!r}; choose one of {list(SOURCES)}")
+    data_module = SOURCES[source]
+
     features = list(FEATURES) if features is None else list(features)
     start, end = pd.Timestamp(start), pd.Timestamp(end)
 
@@ -128,8 +122,16 @@ def build_dataset(symbol, start, end, timeframe="5min", features=None):
         for d in pd.date_range((start - lookback).normalize(), end.normalize(), freq="D")
     ]
 
-    streams = {name: FEATURES[name]["fetch"] for name in features}
-    raw = fetch(streams, symbol, dates)
+    streams = {name: getattr(data_module, FEATURES[name]["fetch"]) for name in features}
+    raw = data_module.fetch(streams, symbol, dates)
+
+    empty = [name for name in features if raw[name].empty]
+    if empty:
+        raise ValueError(
+            f"No data returned for {empty} from source={source!r}, symbol={symbol!r}, "
+            f"window={start.date()}..{end.date()}. Check that symbol is in the format this "
+            f"source expects (e.g. Binance wants 'BTCUSDT', OKX wants 'BTC-USDT-SWAP')."
+        )
 
     columns = [FEATURES[name]["preprocess"](raw[name], timeframe) for name in features]
     df = pd.concat(columns, axis=1).loc[start.floor(timeframe):end]
@@ -138,7 +140,6 @@ def build_dataset(symbol, start, end, timeframe="5min", features=None):
     for col in [c for c in df.columns if "cumulative_volume_delta" in c]:
         df[col] = df[col] - df[col].dropna().iloc[0]
 
-    # Connect data -> chart: stash what was requested and how to draw it.
     df.attrs["features"] = features
     df.attrs["layout"] = default_layout(features)
     return df
