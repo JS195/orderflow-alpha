@@ -18,6 +18,8 @@ Phase 3 will be sizing and risk.
   - **Predicted Funding Rate:** smoothed from the premium index (TWAP over the funding window) rather than shown as delayed settlement steps.
   - **Index Realignment:** every stream lands on one shared time index.
 
+<img src="docs/demo.png" alt="Demo of 4 exchange aggregation matching velo" width="600">
+
 | Source | Feature | Limitation | Verified |
 | :--- | :--- | :--- | :--- |
 | Binance | all | none | static archive, full history since inception |
