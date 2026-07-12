@@ -86,29 +86,14 @@ def get_premium_index_klines(symbol: str, date: str) -> pd.DataFrame:
     since features._funding averages and clamps `close` as if it were
     already the premium, the same shape as Binance's premiumIndexKlines.
 
-    POST /info {"type": "fundingHistory", "coin", "startTime", "endTime"}
-    gives Hyperliquid's real settled premium/funding directly (no need to
-    reconstruct it from mark/index candles the way OKX does). Hyperliquid
-    only settles/reports this hourly though (not every 8h like the other
-    three exchanges, and not every ~30-90s like OKX's own premium ticks) -
-    upsampled onto a 1-min grid (same as okx.py) before returning, so
-    features._funding's rolling smoother has a real point at every step and
-    produces a value at every 5-min output bucket instead of one real point
-    per hour and NaN elsewhere. The smoothing still only has 8 genuinely
-    distinct inputs per 8h window (each just repeated ~60x), but the
-    rolling weighted average blends them into a continuously-evolving line
-    rather than a stepped one - and critically, this also means the funding
-    column no longer has gaps that null out other exchanges' real values
-    when aggregated together in build_dataset (source={...} with multiple
-    exchanges just adds the columns).
-
-    Resampled to 1-min (Hyperliquid's own timestamps land a few tens of ms
-    past the hour, not exactly on it, so this also snaps them onto a clean
-    grid) then reindexed onto the full calendar day before ffilling - each
-    day is fetched separately, so ffilling only between this day's own
-    first/last update leaves the last ~59 minutes empty (nothing later in
-    that same day's own frame to ffill from), which reappears as a gap once
-    days are concatenated.
+    POST /info {"type": "fundingHistory", ...} gives Hyperliquid's real
+    settled premium directly, but only hourly (not every 8h like the other
+    exchanges) - resampled to 1-min and reindexed onto the full calendar day
+    before ffilling, so features._funding's rolling smoother gets a real
+    point at every step instead of one per hour and NaN elsewhere. Without
+    the full-day reindex, ffilling only within a single day's own fetch
+    leaves the last ~59 minutes of each day empty (nothing later in that
+    day's own frame to ffill from).
     """
     start_ts, end_ts = _day_bounds_ms(date)
     resp = _post({"type": "fundingHistory", "coin": symbol, "startTime": start_ts, "endTime": end_ts})
@@ -133,22 +118,18 @@ def _coinalyze_symbol(symbol: str) -> str:
 
 
 def get_oi(symbol: str, date: str) -> pd.DataFrame:
-    """Hyperliquid's own public API only exposes *current* OI (a live
-    snapshot via metaAndAssetCtxs), not a queryable history, and the only
-    official historical source is a paid, requester-pays S3 archive - not
-    used here. This comes from Coinalyze (api.coinalyze.net) instead, a free
-    third-party aggregator that retains Hyperliquid OI at ~7-8 days/5min,
-    ~85 days/1hour, indefinitely/daily (verified live) - see _coinalyze.py.
-    Requires a free COINALYZE_API_KEY environment variable; if unset, this
-    returns an empty DataFrame (same as any other unsupported feature)."""
+    """Hyperliquid's own API only exposes a live OI snapshot, not history
+    (the only official historical source is a paid S3 archive) - this comes
+    from Coinalyze instead, see _coinalyze.py. Requires a free
+    COINALYZE_API_KEY environment variable; returns empty if unset."""
     start_ts, end_ts = _day_bounds_ms(date)
     return _coinalyze.get_oi(_coinalyze_symbol(symbol), start_ts // 1000, end_ts // 1000)
 
 
 def futures_agg_trades(symbol: str, date: str) -> pd.DataFrame:
-    """Taker buy/sell delta, from Coinalyze (see get_oi's docstring for why -
-    Hyperliquid's own public API has no market-wide historical trades
-    endpoint at all, only a single user's fills and live-only recentTrades)."""
+    """Taker buy/sell delta, from Coinalyze - Hyperliquid's own API has no
+    market-wide historical trades endpoint, only a single user's fills and
+    live-only recentTrades."""
     start_ts, end_ts = _day_bounds_ms(date)
     df = _coinalyze.get_taker_volume(_coinalyze_symbol(symbol), start_ts // 1000, end_ts // 1000)
     if not df.empty:

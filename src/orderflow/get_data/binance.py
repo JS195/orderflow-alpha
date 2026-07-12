@@ -4,7 +4,6 @@ import io
 import pandas as pd
 from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor
-import pandas as pd
 
 def fetch(streams: dict, symbol: str, dates: list, max_workers: int = 32) -> dict:
     tasks = [(name, fn, d) for name, fn in streams.items() for d in dates]
@@ -27,10 +26,8 @@ def fetch(streams: dict, symbol: str, dates: list, max_workers: int = 32) -> dic
 def download_zip_in_memory(url: str, header="infer") -> pd.DataFrame:
     resp = requests.get(url)
     if resp.status_code == 404:
-        # The public archive occasionally has a one-off missing day (verified
-        # live, e.g. 2026-06-29's markPriceKlines while every neighboring day
-        # is fine) - same "no data for this day" case as any other source's
-        # empty-day convention, not worth failing a whole multi-day fetch over.
+        # archive occasionally has a one-off missing day - treat like any
+        # other empty day rather than failing the whole fetch
         return pd.DataFrame()
     resp.raise_for_status()
     zip_bytes = io.BytesIO(resp.content)

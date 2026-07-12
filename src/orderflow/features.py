@@ -105,21 +105,20 @@ def default_layout(features):
 def _fetch_source_df(symbol, start, end, timeframe, features, source):
     data_module = SOURCES[source]
 
-    # Features this source can never provide (e.g. spot_cvd on Hyperliquid,
-    # funding/oi/fut_cvd on Coinbase) are dropped here rather than fetched -
-    # that's a structural fact about the exchange, not a real error, so it
-    # shouldn't raise. A *supported* feature coming back empty still raises
-    # below, since that's a real problem (bad symbol, missing optional API
-    # key, data outside retention).
+    # Features a source can never provide (e.g. spot_cvd on Hyperliquid,
+    # funding/oi/fut_cvd on Coinbase) get dropped here rather than fetched -
+    # that's structural, not an error. A *supported* feature coming back
+    # empty still raises below (bad symbol, missing optional API key, data
+    # outside retention - a real problem).
     unsupported = getattr(data_module, "UNSUPPORTED", frozenset())
     features = [name for name in features if name not in unsupported]
     if not features:
         return None
 
-    # Warm-up is per-feature: go back far enough to cover the largest lookback any
-    # requested feature declares (e.g. funding's 8h rolling window). Features with
-    # no "warmup" need none, so a query without them fetches no extra days.
-    # We only execute a lookback if one of the features demands it. This is so we can go back in future perhaps with we need moving averages or something
+    # Warm-up: go back far enough to cover the largest lookback any requested
+    # feature declares (e.g. funding's 8h window) - features with no "warmup"
+    # fetch no extra days. This is so we can go back in future perhaps with
+    # we need moving averages or something
     lookback = max(
         (pd.Timedelta(FEATURES[name].get("warmup", 0)) for name in features),
         default=pd.Timedelta(0),
@@ -181,11 +180,11 @@ def build_dataset(start, end, timeframe="5min", features=None, source=None):
         if valid.empty:
             # raw[name] wasn't empty (that check already passed above), but
             # none of the rows it did have land inside [start, end] once
-            # sliced - e.g. a source with a rolling retention window (like
-            # Deribit's ~24h trade history) where the requested date range
-            # has already aged out from under it. Without this check that's
-            # an opaque IndexError from .iloc[0] on an empty series instead
-            # of a message that points at the actual cause.
+            # sliced - e.g. a source with a short rolling retention window
+            # where the requested date range has already aged out from
+            # under it. Without this check that's an opaque IndexError from
+            # .iloc[0] on an empty series instead of a message that points
+            # at the actual cause.
             raise ValueError(
                 f"'{col}' has no data inside window={start}..{end} for source={source!r} - "
                 f"the underlying data may not cover this time range (some sources only "

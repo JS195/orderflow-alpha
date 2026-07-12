@@ -1,31 +1,17 @@
 """Shared Coinalyze fallback for open interest and taker buy/sell volume.
 
-Not a registered `source` in features.SOURCES - this is a supplementary data
-source other get_data modules pull from to extend or replace their own data,
-not something you'd select on its own (Coinalyze doesn't have candles/
-funding, so it can't stand in for a whole exchange).
+Not a registered `source` in features.SOURCES - other get_data modules pull
+from this to extend or replace their own data (no candles/funding here, so
+it can't stand in for a whole exchange on its own). Used by okx.py (OKX's
+own OI/taker-volume only retains ~2 days), hyperliquid.py (no historical OI
+or market-wide trades endpoint at all, free or otherwise) and coinbase.py
+(its own ticker endpoint reports the maker side, and even corrected for
+that the CVD still didn't match velo.xyz - Coinalyze's own classification
+checked out fine via the tick rule, so spot_agg_trades just uses this
+instead).
 
-Why this exists:
-- OKX's own OI/taker-volume endpoints only retain ~2 days at 5-min
-  resolution, degrading to daily beyond ~4 days (see okx.py).
-- Hyperliquid has no historical OI or market-wide trades endpoint at all,
-  free or otherwise (see hyperliquid.py).
-- Coinbase's own ticker endpoint reports the MAKER side of a trade, not the
-  taker side CVD needs - even after inverting for that, the resulting spot
-  CVD still didn't match velo.xyz's Coinbase-only chart, so Coinbase's
-  spot_agg_trades sources buy/sell volume from here entirely instead (see
-  coinbase.py).
-
-Coinalyze (api.coinalyze.net) aggregates OI and buy/sell volume for both
-futures and spot markets across many exchanges, with its own retention
-tiers - verified live: ~7-8 days at 5min, ~85 days at 1hour, indefinite at
-daily. Its own buy/sell classification was independently spot-checked via
-the tick rule (price direction vs. volume-delta sign) and found to be
-correctly oriented, unlike Coinbase's raw maker-side field.
-
-Requires a free Coinalyze account (https://coinalyze.net/account/api-key/,
-no credit card) - set the key as the COINALYZE_API_KEY environment variable.
-Never commit an actual key to this file or anywhere else in the repo.
+Free account, no credit card: https://coinalyze.net/account/api-key/ - set
+as COINALYZE_API_KEY. Never commit an actual key here or anywhere in the repo.
 """
 
 import requests
@@ -35,11 +21,10 @@ import time
 
 BASE_URL = "https://api.coinalyze.net/v1"
 
-# Coinalyze's own retention per interval, verified live against real data
-# (not documented anywhere) - same idea as okx.py's _RUBIK_PERIODS: try
-# finest first, only fall back to a coarser period for whatever gap it
-# doesn't cover, so a 10-day-old date still gets full 5-min resolution for
-# whichever portion of it was within Coinalyze's 5-min window.
+# retention tiers, verified live (not documented anywhere) - try finest
+# first, fall back to a coarser period only for whatever gap it doesn't
+# cover, so a 10-day-old date still gets 5min resolution wherever it's
+# still within that window
 _PERIODS = (("5min", 300), ("1hour", 3600), ("daily", 86400))
 _COVERAGE_THRESHOLD = 0.8
 
@@ -56,10 +41,9 @@ def _api_key() -> str:
 
 
 def has_api_key() -> bool:
-    """Callers (okx.py, hyperliquid.py) check this before reaching for a
-    Coinalyze supplement, so an unset key degrades to 'no supplement' rather
-    than raising mid-request - Coinalyze is optional/supplementary, not a
-    hard dependency of any get_data module."""
+    """Callers check this before reaching for a supplement, so a missing
+    key degrades to 'no data' rather than raising mid-request - this is
+    optional/supplementary, not a hard dependency."""
     return bool(os.environ.get("COINALYZE_API_KEY"))
 
 
